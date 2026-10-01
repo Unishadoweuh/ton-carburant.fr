@@ -1,0 +1,16 @@
+{
+  "name": "Ton-Carburant",
+  "short_name": "Ton-Carburant",
+  "description": "La station-service la moins chère autour de vous, prix officiels actualisés toutes les 10 minutes.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f5f6f8",
+  "theme_color": "#0b6e4f",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

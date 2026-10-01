@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ton-Carburant — la station la moins chère autour de vous</title>
+  <meta name="description" content="Trouvez en quelques secondes la station-service la moins chère autour de vous : prix officiels mis à jour toutes les 10 minutes, ruptures de stock et carte.">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#101318" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://toncarburant.fr/">
+  <meta property="og:title" content="Ton-Carburant — la station la moins chère autour de vous">
+  <meta property="og:description" content="Prix officiels de toutes les stations de France, actualisés toutes les 10 minutes.">
+  <meta property="og:url" content="https://toncarburant.fr/">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <a class="skip-link" href="#results">Aller aux résultats</a>
+
+  <header class="topbar" id="topbar">
+    <div class="topbar__inner">
+      <div class="topbar__top">
+        <a class="brand" href="./" aria-label="Ton-Carburant, accueil">
+          <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20V5.5A1.5 1.5 0 0 1 5.5 4h6A1.5 1.5 0 0 1 13 5.5V20" />
+            <path d="M3 20h11" />
+            <path d="M6.5 7.5h4v3h-4z" />
+            <path d="M13 9h2.5a1.5 1.5 0 0 1 1.5 1.5v5a1.5 1.5 0 0 0 3 0V11" />
+          </svg>
+          <span class="brand__name">Ton-<span>Carburant</span></span>
+        </a>
+        <p class="freshness" id="freshness"><span class="freshness__dot"></span><span class="freshness__text">Chargement…</span></p>
+      </div>
+
+      <form class="search" id="search-form" role="search" autocomplete="off">
+        <div class="search__field">
+          <svg class="search__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+          <input id="search-input" class="search__input" type="search" name="q" enterkeyhint="search"
+                 placeholder="Ville, code postal, adresse, département…" aria-label="Lieu recherché"
+                 role="combobox" aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false">
+          <button type="button" id="locate-btn" class="search__locate" title="Autour de moi" aria-label="Chercher autour de ma position">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>
+          </button>
+          <ul id="suggestions" class="suggestions" role="listbox" aria-label="Suggestions de lieux" hidden></ul>
+        </div>
+        <button type="submit" class="search__submit">Rechercher</button>
+      </form>
+
+      <div class="filters">
+        <fieldset class="fuels" id="fuels">
+          <legend class="sr-only">Carburant</legend>
+        </fieldset>
+        <label class="radius" id="radius-wrap">
+          <span class="sr-only">Rayon de recherche</span>
+          <select id="radius"></select>
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="map-wrap" id="map-wrap">
+      <div id="map" class="map"></div>
+      <button type="button" class="map-toggle" id="map-toggle" data-action="toggle-map">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        <span class="map-toggle__label">Agrandir</span>
+      </button>
+    </div>
+
+    <div class="side">
+      <section class="panel" id="panel">
+        <div id="message" class="message" hidden></div>
+
+        <section id="welcome" class="welcome" hidden>
+          <h1>Le plein au meilleur prix, <span>en un geste.</span></h1>
+          <p class="welcome__lead">Prix officiels de toutes les stations de France, actualisés toutes les 10 minutes.</p>
+          <button type="button" class="btn btn--primary btn--large" data-action="locate">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.5"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>
+            Stations autour de moi
+          </button>
+          <div id="recents" class="recents" hidden>
+            <h2 class="recents__title">Recherches récentes</h2>
+            <div class="recents__list" id="recents-list"></div>
+          </div>
+          <p class="welcome__examples">Essayez aussi :
+            <button type="button" class="link" data-query="Lyon">Lyon</button>,
+            <button type="button" class="link" data-query="33000">33000</button>,
+            <button type="button" class="link" data-query="Bretagne">Bretagne</button>
+          </p>
+        </section>
+
+        <div id="toolbar" class="toolbar" hidden>
+          <div id="summary" class="summary"></div>
+          <div class="controls">
+            <div class="segmented" id="sort" role="group" aria-label="Trier les résultats">
+              <button type="button" data-sort="price" class="is-active">Prix</button>
+              <button type="button" data-sort="distance">Distance</button>
+            </div>
+            <label class="toggle" title="Masque les stations déclarées fermées à cette heure">
+              <input type="checkbox" id="open-now">
+              <span>Ouvert</span>
+            </label>
+          </div>
+        </div>
+
+        <ol id="results" class="results"></ol>
+        <p id="results-status" class="sr-only" role="status" aria-live="polite"></p>
+
+        <footer class="footer">
+          <p class="footer__legal">
+            Données : <a href="https://www.prix-carburants.gouv.fr/rubrique/opendata/" target="_blank" rel="noopener">prix-carburants.gouv.fr</a> (licence ouverte) ·
+            Géocodage : <a href="https://adresse.data.gouv.fr" target="_blank" rel="noopener">API Adresse</a> ·
+            Carte : <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>
+          </p>
+        </footer>
+      </section>
+
+      <div id="backdrop" class="backdrop" hidden></div>
+      <aside id="detail" class="detail" hidden aria-label="Fiche de la station" tabindex="-1">
+        <div class="detail__bar" id="detail-bar">
+          <span class="detail__handle" aria-hidden="true"></span>
+          <button type="button" class="detail__close" data-action="close-detail" aria-label="Fermer la fiche">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+        <div id="detail-body" class="detail__body"></div>
+      </aside>
+    </div>
+  </main>
+
+  <script src="vendor/leaflet/leaflet.js" defer></script>
+  <script src="app.js" defer></script>
+</body>
+</html>

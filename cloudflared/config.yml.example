@@ -1,0 +1,14 @@
+# Tunnel géré localement (profil "tunnel-config").
+#   1. cloudflared tunnel login
+#   2. cloudflared tunnel create toncarburant      -> crée <UUID>.json
+#   3. copier <UUID>.json dans ce dossier, puis ce fichier en config.yml
+#   4. cloudflared tunnel route dns toncarburant toncarburant.fr
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/00000000-0000-0000-0000-000000000000.json
+
+ingress:
+  - hostname: toncarburant.fr
+    service: http://app:8000
+  - hostname: www.toncarburant.fr
+    service: http://app:8000
+  - service: http_status:404

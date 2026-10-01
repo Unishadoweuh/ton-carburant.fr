@@ -1,0 +1,9 @@
+.git
+.env
+data
+tests
+cloudflared
+**/__pycache__
+.pytest_cache
+.venv
+*.md

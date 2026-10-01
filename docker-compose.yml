@@ -1,0 +1,46 @@
+name: toncarburant
+
+services:
+  app:
+    build: .
+    image: toncarburant:latest
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_PATH: /data/carburants.db
+    volumes:
+      - carburant-data:/data
+    ports:
+      # Accès local (LAN ou machine). Le tunnel Cloudflare n'a pas besoin de ce port.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8000}:8000"
+
+  # Tunnel géré depuis le dashboard Cloudflare (Zero Trust) : jeton dans TUNNEL_TOKEN.
+  # Activé par COMPOSE_PROFILES=tunnel dans .env.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      app:
+        condition: service_healthy
+
+  # Variante : tunnel géré localement avec cloudflared/config.yml + fichier d'identifiants.
+  # Activée par COMPOSE_PROFILES=tunnel-config dans .env.
+  cloudflared-config:
+    image: cloudflare/cloudflared:2026.9.1
+    profiles: ["tunnel-config"]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  carburant-data:

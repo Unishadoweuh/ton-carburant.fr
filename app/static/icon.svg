@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Ton-Carburant">
+  <rect width="512" height="512" rx="116" fill="#0b6e4f"/>
+  <g fill="none" stroke="#ffffff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M140 400V150a34 34 0 0 1 34-34h94a34 34 0 0 1 34 34v250"/>
+    <path d="M112 400h220"/>
+    <path d="M302 196h44a34 34 0 0 1 34 34v104a26 26 0 0 0 52 0V236l-34-34"/>
+  </g>
+  <rect x="180" y="158" width="82" height="66" rx="12" fill="#3cc58f"/>
+</svg>
