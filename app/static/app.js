@@ -18,6 +18,48 @@
     clock: '<svg class="sugg__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3 2"/></svg>',
   };
 
+  // Domaine officiel des enseignes les plus fréquentes, pour aller chercher leur favicon
+  // (pas de logo dans les données open data : on l'approxime via le favicon du site de la marque).
+  const BRAND_LOGO_DOMAINS = {
+    carrefour: "carrefour.fr", carrefourmarket: "carrefour.fr", carrefourcontact: "carrefour.fr",
+    total: "totalenergies.fr", totalenergies: "totalenergies.fr", totalaccess: "totalenergies.fr", totalcontact: "totalenergies.fr",
+    eleclerc: "e.leclerc",
+    intermarche: "mousquetaires.com",
+    avia: "avia-france.com",
+    esso: "esso.fr", essoexpress: "esso.fr",
+    systemeu: "magasins-u.com", superu: "magasins-u.com", u: "magasins-u.com",
+    stationu: "magasins-u.com", lastationu: "magasins-u.com", uexpress: "magasins-u.com",
+    auchan: "auchan.fr",
+    eni: "eni.com",
+    netto: "netto.fr",
+    bp: "www.bp.com",
+    shell: "shell.fr",
+    dyneff: "dyneff.fr",
+    casino: "casino.fr",
+    dats24: "dats24.be",
+    spar: "spar.fr",
+    g20: "g20.fr",
+    gulf: "gulfoil.com",
+  };
+
+  function brandLogoUrl(brand, size) {
+    const key = (brand || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]/g, "");
+    const domain = BRAND_LOGO_DOMAINS[key];
+    return domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=${size}` : null;
+  }
+
+  // Logo si la marque est reconnue, sinon repli sur le nom en texte (jamais les deux à la fois :
+  // si le logo échoue à charger, le onerror bascule sur le texte au lieu de laisser une image cassée).
+  function brandMark(brand, size, textClass) {
+    if (!brand) return "";
+    const logoUrl = brandLogoUrl(brand, size);
+    if (!logoUrl) return `<span class="${textClass}">${escapeHtml(brand)}</span>`;
+    return `<span class="brand-mark">
+      <img class="brand-mark__logo" src="${logoUrl}" width="${size}" height="${size}" alt="${escapeHtml(brand)}" title="${escapeHtml(brand)}" loading="lazy" onerror="this.hidden=true;this.nextElementSibling.hidden=false">
+      <span class="${textClass}" hidden>${escapeHtml(brand)}</span>
+    </span>`;
+  }
+
   const $ = (sel) => document.querySelector(sel);
   const el = {
     topbar: $("#topbar"), form: $("#search-form"), input: $("#search-input"), suggestions: $("#suggestions"),
@@ -598,7 +640,7 @@
       ? `<span class="price" style="--h:${priceHue(station.price)}">${fmtPrice(station.price)}<small>€/L</small></span>${delta}`
       : '<span class="price">Rupture</span>';
 
-    const brand = station.brand ? `<span class="card__brand">${escapeHtml(station.brand)}</span>` : "";
+    const brand = brandMark(station.brand, 20, "card__brand");
 
     return `
       <li><button type="button" class="card card--${station.status}${station.id === state.selectedId ? " is-selected" : ""}" data-id="${station.id}">
@@ -619,13 +661,13 @@
     if (!best || !data.stats) return "";
     const saving = data.stats.median - best.price;
     const where = [escapeHtml(best.city), best.distance_km != null ? fmtDistance(best.distance_km) : ""].filter(Boolean).join(" · ");
-    const title = best.brand ? `${escapeHtml(best.brand)} · ${escapeHtml(best.address)}` : escapeHtml(best.address);
+    const brand = best.brand ? `${brandMark(best.brand, 16, "card__brand")} ` : "";
     return `
       <div class="best"><button type="button" data-id="${best.id}">
         <span class="best__label">Le moins cher · ${escapeHtml(FUEL_LABELS[data.fuel])}</span>
         <span class="best__row">
           <span class="best__price">${fmtPrice(best.price)}<small>€/L</small></span>
-          <span class="best__where">${title}<span>${where}</span></span>
+          <span class="best__where">${brand}${escapeHtml(best.address)}<span>${where}</span></span>
         </span>
         ${saving >= 0.005 ? `<p class="best__saving"><strong>${nf2.format(saving * TANK_LITRES)} € d'économie</strong> sur un plein de ${TANK_LITRES} L par rapport au prix médian du secteur (${fmtPrice(data.stats.median)} €)</p>` : ""}
       </button></div>`;
@@ -727,7 +769,7 @@
 
     const destination = `${station.lat},${station.lon}`;
     return `
-      ${station.brand ? `<p class="detail__brand">${escapeHtml(station.brand)}</p>` : ""}
+      ${station.brand ? `<p class="detail__brand">${brandMark(station.brand, 32, "detail__brand-text")}</p>` : ""}
       <h2>${escapeHtml(station.address) || "Station-service"}</h2>
       <p class="detail__sub">${sub.join(" · ")}</p>
       ${tags.length ? `<div class="detail__tags">${tags.join("")}</div>` : ""}
