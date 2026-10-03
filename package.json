@@ -1,0 +1,26 @@
+{
+  "name": "ton-carburant",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Ton-Carburant : la station-service la moins chère autour de soi, sur Cloudflare (Workers + D1).",
+  "license": "MIT",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate": "wrangler d1 migrations apply DB --remote",
+    "ingest": "tsx ingest/run.ts",
+    "ingest:local": "tsx ingest/run.ts --local",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261001.1",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.40.0"
+  }
+}

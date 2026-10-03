@@ -1,8 +1,9 @@
-.env
-data/
-__pycache__/
-.pytest_cache/
-.venv/
-cloudflared/*.json
-cloudflared/config.yml
+node_modules/
+.wrangler/
+.dev.vars
 .DS_Store
+.env
+*.sqlite
+/ingest/.tmp/
+__pycache__/
+.venv/

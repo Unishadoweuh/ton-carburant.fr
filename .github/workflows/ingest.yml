@@ -1,0 +1,31 @@
+name: Import des prix
+
+# Remplace l'ancien planificateur FastAPI. Le plan gratuit des Workers limite le
+# CPU à 10 ms par invocation : le flux (~29 Mo) est donc traité ici, et seules
+# les stations modifiées sont écrites dans D1 (limite de 100 000 écritures/jour).
+# GitHub plafonne la fréquence à 5 minutes et peut retarder les exécutions.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+# Un seul import à la fois ; un import en cours n'est jamais interrompu.
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run ingest
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

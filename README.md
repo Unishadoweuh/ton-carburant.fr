@@ -1,9 +1,11 @@
 # Ton-Carburant
 
 Trouver en quelques secondes la station-service la moins chère autour de soi, partout en France.
-Application auto-hébergée, 100 % gratuite : données officielles open data, géocodage public,
-carte OpenStreetMap, aucune clé d'API. Destinée à être servie sur **https://toncarburant.fr**
-depuis un serveur maison via Cloudflare Tunnel.
+Application 100 % gratuite : données officielles open data, géocodage public, carte OpenStreetMap,
+aucune clé d'API. Elle tourne sur l'edge de **Cloudflare** (Workers + D1), sans serveur à gérer.
+Adresse actuelle : **https://carburant.unishadow.ovh** (à terme : toncarburant.fr).
+
+> L'ancienne version FastAPI + SQLite + Docker est conservée dans [`legacy/`](legacy/).
 
 ## Fonctionnalités
 
@@ -20,127 +22,111 @@ depuis un serveur maison via Cloudflare Tunnel.
 ## Architecture
 
 ```
-app/
-  main.py      FastAPI : API REST, planificateur d'import, fichiers statiques
-  ingest.py    téléchargement + parsing du flux, import SQLite (aussi utilisable en CLI)
-  search.py    recherche par rayon (index R*Tree) ou par département/région
-  geocode.py   proxy vers l'API Adresse avec cache et serveur de secours
-  areas.py     départements, régions, plages de codes postaux
-  config.py    configuration par variables d'environnement
-  static/      index.html, app.css, app.js + Leaflet embarqué (vendor/)
-tests/         pytest (parsing, import, recherche, API)
-cloudflared/   exemple de config.yml pour un tunnel géré localement
+public/        frontend statique (index.html, app.css, app.js, Leaflet embarqué), sans build
+src/
+  worker.ts    Worker : API REST /api/* (les autres chemins sont servis par les Static Assets)
+  config.ts    configuration par variables du Worker ([vars] de wrangler.toml)
+  lib/         logique métier partagée : search, areas, hours, fuels, geocode, feed, brands
+ingest/        import du flux dans D1 (exécuté par GitHub Actions)
+migrations/    schéma D1
+tests/         Vitest (parsing, import différentiel, recherche, API)
+legacy/        ancienne version Python/Docker
+.github/workflows/  deploy.yml (déploiement) et ingest.yml (import toutes les 10 min)
 ```
 
-- **Un seul conteneur** Python (FastAPI + uvicorn) sert l'API et le frontend.
-- **SQLite en mode WAL** dans un volume Docker. Chaque import remplace les données en une transaction : les visiteurs voient l'ancienne version jusqu'au commit.
-- **Recherche géospatiale** : table virtuelle R*Tree (intégrée à SQLite, pas besoin de SpatiaLite) pour filtrer la boîte englobante, puis distance exacte (haversine) sur les seuls candidats. Environ 1 ms pour un rayon de 15 km, environ 7 ms pour toute l'Île-de-France.
-- **Import planifié** dans le processus (toutes les 10 min par défaut). Au redémarrage, l'import attend si les données sont encore fraîches.
+```
+ GitHub Actions (*/10)                      Cloudflare
+┌──────────────────────┐   écritures    ┌──────────────┐   lectures   ┌────────────────────┐
+│ ingest/run.ts        │ ─────────────▶ │      D1      │ ◀─────────── │ Worker (/api/*)    │ ◀── navigateur
+│ flux JSON ~29 Mo     │  (différentiel)│  SQLite edge │              │ + Static Assets    │
+└──────────────────────┘                └──────────────┘              └────────────────────┘
+```
+
+- **Un seul Worker** sert l'API et le frontend (Static Assets) : même origine, pas de CORS à gérer, un seul déploiement. Les requêtes statiques ne consomment pas de temps CPU.
+- **Pourquoi l'import n'est pas un Cron Trigger Worker** : le plan gratuit des Workers limite le CPU à 10 ms par invocation, très insuffisant pour parser les ~29 Mo du flux. L'import tourne donc dans GitHub Actions (gratuit). GitHub plafonne les crons à 5 min et peut les retarder : les données ont typiquement 10 à 15 min de retard, sans incidence pratique. Le module de parsing (`src/lib/feed.ts`) est pur : avec un plan Workers payant, il pourrait être appelé tel quel depuis un `scheduled()`.
+- **Schéma D1 dénormalisé** : une ligne par station, avec prix et ruptures en JSON. L'import calcule une empreinte par station et **n'écrit que les stations modifiées** (quelques milliers par jour sur ~9 800), pour rester sous la limite gratuite de 100 000 lignes écrites par jour.
+- **Recherche géospatiale** : D1 n'a pas de R*Tree. La boîte englobante est filtrée via l'index B-tree `(lat, lon)`, puis la distance haversine exacte est calculée en TypeScript sur les seuls candidats. Les départements et régions utilisent des plages de codes postaux sur l'index `cp`.
+- **Cache** : les réponses `/api/*` portent `Cache-Control: public, max-age=60` et sont mises en cache à l'edge (Cache API), ce qui protège le quota de lectures D1 (5 M lignes/jour) et le budget CPU.
 
 ### Sources de données
 
 | Donnée | Source | Notes |
 |---|---|---|
-| Prix, ruptures, horaires, services | `https://donnees.roulez-eco.fr/opendata/instantane_ruptures` (flux instantané v2) | Licence ouverte, sans clé |
-| Géocodage | `https://data.geopf.fr/geocodage/search` puis `https://api-adresse.data.gouv.fr/search/` en secours | API Adresse (BAN), migrée sur la Géoplateforme IGN |
+| Prix, ruptures, horaires, services | [data.economie.gouv.fr](https://data.economie.gouv.fr/explore/dataset/prix-des-carburants-en-france-flux-instantane-v2/) : « Prix des carburants en France - Flux instantané - v2 » (export JSON) | Licence ouverte, sans clé |
+| Enseignes | Référentiel communautaire data.gouv.fr (CSV enrichi par OpenStreetMap) | Facultatif ; en cas d'échec, les enseignes déjà en base sont conservées |
+| Géocodage | `https://data.geopf.fr/geocodage/search` puis `https://api-adresse.data.gouv.fr/search/` en secours | API Adresse (BAN), Géoplateforme IGN |
 | Fond de carte | tuiles OpenStreetMap | voir [Tuiles de carte](#tuiles-de-carte) |
 
-Format du flux constaté en septembre 2026, géré par `app/ingest.py` :
+Format du flux (export JSON de l'XML officiel), géré par `src/lib/feed.ts` :
 
-- archive ZIP contenant un XML en ISO-8859-1 (le XML brut est aussi accepté) ;
-- coordonnées en degrés × 100 000, parfois décimales ;
-- prix en euros (l'ancien format en millièmes est aussi accepté) ;
-- dates en heure de Paris.
+- attributs préfixés par `@`, éléments uniques sous forme d'objet (et non de tableau), sous-arbres `horaires`, `services`, `prix` et `rupture` sérialisés en chaînes JSON ;
+- coordonnées en degrés × 100 000, parfois décimales ; prix en euros (l'ancien format en millièmes est aussi accepté) ; dates en heure de Paris.
 
-Un carburant apparaît soit dans `<prix>`, soit dans `<rupture>`. Une rupture `temporaire` sans date de fin est affichée « Rupture ». Une rupture `definitive` signifie que le carburant n'est pas distribué. Les petites stations dispensées de déclaration n'apparaissent pas pour certains carburants : elles sont comptées à part (« N sans Gazole déclaré »), jamais présentées comme en rupture.
+Un carburant apparaît soit dans `prix`, soit dans `rupture`. Une rupture `temporaire` sans date de fin est affichée « Rupture ». Une rupture `definitive` signifie que le carburant n'est pas distribué. Les petites stations dispensées de déclaration n'apparaissent pas pour certains carburants : elles sont comptées à part (« N sans Gazole déclaré »), jamais présentées comme en rupture.
 
-> **Remarque** : le flux ne contient ni le nom ni l'enseigne des stations. L'app affiche donc l'adresse et la ville.
+## Mise en route
 
-## Démarrage rapide
+Prérequis : Node.js 24+ et un compte Cloudflare (gratuit). Le domaine `unishadow.ovh` doit être une zone Cloudflare de ce compte.
 
-Prérequis : Docker avec Compose v2.
+### 1. Installer et créer la base D1
 
 ```bash
-git clone <ce dépôt> toncarburant && cd toncarburant
-cp .env.example .env        # puis renseigner TUNNEL_TOKEN (voir ci-dessous)
-docker compose up -d --build
+npm install
+npx wrangler login
+npx wrangler d1 create ton-carburant-db
 ```
 
-L'app est accessible sur http://127.0.0.1:8000. Le premier import prend quelques secondes ; la barre de statut en bas de liste l'indique.
+Copier le `database_id` affiché dans [`wrangler.toml`](wrangler.toml) (bloc `[[d1_databases]]`, il n'est pas secret).
 
-Pour un essai sans tunnel, laisser `COMPOSE_PROFILES` vide dans `.env` (ou ne pas créer de `.env`).
-
-Suivre les logs : `docker compose logs -f app`.
-
-## Exposition publique avec Cloudflare Tunnel
-
-Aucun port à ouvrir sur la box : `cloudflared` établit une connexion sortante vers Cloudflare.
-Prérequis : le domaine `toncarburant.fr` doit être géré par Cloudflare (serveurs DNS pointant vers Cloudflare).
-
-### Option A — tunnel géré depuis le dashboard (recommandé)
-
-1. Dans le dashboard Cloudflare, ouvrir **Zero Trust → Networks → Tunnels**, puis **Create a tunnel**.
-2. Choisir **Cloudflared**, nommer le tunnel (ex. `toncarburant`).
-3. À l'étape d'installation, copier **uniquement le jeton** (la longue chaîne après `--token`) dans `.env` :
-   ```env
-   COMPOSE_PROFILES=tunnel
-   TUNNEL_TOKEN=eyJhIjoi...
-   ```
-4. Dans l'onglet **Public Hostname**, ajouter :
-   - Subdomain : *(vide)*, Domain : `toncarburant.fr`
-   - Service : type `HTTP`, URL `app:8000`
-
-   Recommencer avec le subdomain `www` si besoin. L'enregistrement DNS (CNAME vers `<id>.cfargotunnel.com`) est créé automatiquement.
-5. Lancer `docker compose up -d`. Le tunnel doit apparaître **Healthy** dans le dashboard.
-
-`app:8000` fonctionne parce que `cloudflared` tourne dans le même réseau Docker que l'app.
-
-### Option B — tunnel géré localement avec `config.yml`
+### 2. Lancer en local
 
 ```bash
-cloudflared tunnel login
-cloudflared tunnel create toncarburant                 # génère ~/.cloudflared/<UUID>.json
-cloudflared tunnel route dns toncarburant toncarburant.fr
-cp ~/.cloudflared/<UUID>.json cloudflared/
-cp cloudflared/config.yml.example cloudflared/config.yml   # remplacer l'UUID
+npm run db:migrate:local      # crée le schéma dans la D1 locale
+npm run ingest:local          # importe le vrai flux dans la D1 locale (~1 min la première fois)
+npx wrangler dev              # http://localhost:8787
 ```
 
-Puis dans `.env` : `COMPOSE_PROFILES=tunnel-config`, et `docker compose up -d`.
+`npm test` lance les tests, `npm run typecheck` vérifie les types.
 
-### Réglages Cloudflare conseillés
+### 3. Déploiement automatique (GitHub Actions)
 
-- SSL/TLS : **Full** ; « Always Use HTTPS » activé. HTTPS est requis pour la géolocalisation du navigateur.
-- Les réponses `/api/*` portent un `Cache-Control: public, max-age=60`. Une règle de cache Cloudflare peut les mettre en cache pour soulager le serveur si le trafic augmente.
+1. Créer un jeton API Cloudflare (**My Profile → API Tokens → Create Token**) avec les permissions **Account → Workers Scripts : Edit**, **Account → D1 : Edit** et **Zone → Workers Routes : Edit** (zone `unishadow.ovh`). L'attachement du domaine personnalisé peut demander en plus **Zone → DNS : Edit**.
+2. Dans le dépôt GitHub, **Settings → Secrets and variables → Actions**, ajouter :
+   - `CLOUDFLARE_API_TOKEN` : le jeton ci-dessus ;
+   - `CLOUDFLARE_ACCOUNT_ID` : l'identifiant du compte (barre latérale du dashboard Cloudflare).
+3. Chaque `git push` sur `main` déclenche [`deploy.yml`](.github/workflows/deploy.yml) : types, tests, migrations D1 puis `wrangler deploy`. Le domaine `carburant.unishadow.ovh` est créé automatiquement (route `custom_domain`).
+4. [`ingest.yml`](.github/workflows/ingest.yml) importe les prix toutes les 10 minutes. Pour remplir la base immédiatement après le premier déploiement : onglet **Actions → Import des prix → Run workflow**.
+
+> GitHub désactive les workflows planifiés d'un dépôt public sans activité pendant 60 jours : relancer le workflow manuellement (ou pousser un commit) pour le réactiver.
+
+### Passer sur toncarburant.fr
+
+Quand le domaine sera géré par Cloudflare, ajouter dans `wrangler.toml` :
+
+```toml
+routes = [
+  { pattern = "carburant.unishadow.ovh", custom_domain = true },
+  { pattern = "toncarburant.fr", custom_domain = true },
+  { pattern = "www.toncarburant.fr", custom_domain = true },
+]
+```
+
+Mettre à jour aussi l'URL canonique dans `public/index.html`. HTTPS est requis pour la géolocalisation du navigateur (fourni par Cloudflare).
 
 ## Configuration
 
-Toutes les variables sont optionnelles (voir `.env.example`). Après modification : `docker compose up -d` (le conteneur est recréé).
+Variables du Worker, dans `[vars]` de `wrangler.toml` (toutes optionnelles) :
 
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `DEFAULT_RADIUS_KM` | `10` | Rayon proposé par défaut |
 | `MAX_RADIUS_KM` | `50` | Rayon maximal accepté par l'API |
 | `RADIUS_OPTIONS_KM` | `5,10,15,20,30,50` | Choix du menu déroulant (le rayon par défaut y est ajouté s'il manque) |
-| `INGEST_INTERVAL_MINUTES` | `10` | Fréquence d'import (minimum 5) |
-| `INGEST_MIN_STATIONS` | `1000` | Un flux avec moins de stations est jugé incomplet et ignoré |
-| `INGEST_ENABLED` | `true` | Désactiver le planificateur (tests, instance secondaire) |
-| `FEED_URL` | flux instantané v2 | URL du flux officiel |
-| `HTTP_TIMEOUT_S` | `60` | Délai de téléchargement du flux |
+| `INGEST_INTERVAL_MINUTES` | `10` | Intervalle attendu entre deux imports, pour l'indicateur de fraîcheur (minimum 5) |
 | `GEOCODER_URLS` | Géoplateforme, puis BAN | Géocodeurs essayés dans l'ordre |
 | `TILE_URL` / `TILE_ATTRIBUTION` / `TILE_MAX_ZOOM` | OpenStreetMap | Fond de carte |
-| `DB_PATH` | `/data/carburants.db` | Emplacement de la base (dans le volume) |
-| `APP_BIND` / `APP_PORT` | `127.0.0.1` / `8000` | Publication locale du port (`0.0.0.0` pour le LAN) |
-| `COMPOSE_PROFILES` | — | `tunnel`, `tunnel-config` ou vide |
-| `TUNNEL_TOKEN` | — | Jeton du tunnel (option A) |
-| `LOG_LEVEL` | `INFO` | Verbosité des logs |
 
-**Exemple : passer le rayon par défaut à 15 km**
-
-```env
-DEFAULT_RADIUS_KM=15
-```
-
-Puis `docker compose up -d`. Le rayon choisi par un visiteur reste mémorisé dans son navigateur.
+Variables d'environnement du script d'import (à définir dans `ingest.yml` si besoin) : `FEED_URL`, `BRANDS_URL` (vide = pas d'enseignes), `INGEST_MIN_STATIONS` (défaut `1000` : un flux plus petit est jugé incomplet et ignoré).
 
 ## Tuiles de carte
 
@@ -152,38 +138,32 @@ Par défaut, l'app utilise les tuiles standard d'OpenStreetMap, soumises à la [
 ## Import manuel et maintenance
 
 ```bash
-# Forcer un import immédiat
-docker compose exec app python -m app.ingest
-
-# Importer un fichier téléchargé à la main (ZIP ou XML)
-docker compose cp flux.zip app:/tmp/flux.zip
-docker compose exec app python -m app.ingest --file /tmp/flux.zip
-
-# État des données
-curl -s http://127.0.0.1:8000/api/status
-
-# Sauvegarde de la base (cohérente même pendant un import)
-docker compose exec app python -c "import sqlite3; s=sqlite3.connect('/data/carburants.db'); d=sqlite3.connect('/data/backup.db'); s.backup(d)"
-
-# Mise à jour du code
-git pull && docker compose up -d --build
+npm run ingest                                    # import vers la D1 distante (CLOUDFLARE_API_TOKEN requis)
+npx tsx ingest/run.ts --file flux.json --dry-run  # lit un export local, affiche le différentiel sans écrire
+npx wrangler d1 execute DB --remote --command "SELECT COUNT(*) FROM stations"
+curl -s https://carburant.unishadow.ovh/api/status
 ```
-
-La base peut être supprimée sans risque (`docker compose down -v`) : elle est reconstruite au prochain import.
 
 Si le flux officiel est indisponible ou invalide :
 
 - les dernières données restent servies ;
-- l'erreur est visible dans `/api/status` (`last_error`) et dans les logs ;
+- le workflow d'import échoue (visible dans l'onglet Actions) et l'erreur est enregistrée dans `/api/status` (`last_error`) ;
 - le point de statut passe à l'orange dans l'interface au-delà de 45 minutes sans import réussi.
 
-Si le format du flux change, tout le parsing est concentré dans `app/ingest.py` (`parse_station`). Ajouter un cas au XML d'exemple de `tests/conftest.py`.
+Si le format du flux change, le parsing est concentré dans `src/lib/feed.ts` (`parseStation`) : ajouter un cas dans `tests/helpers.ts`.
 
-> **Un seul worker uvicorn** : le planificateur d'import tourne dans le processus. Ne pas ajouter `--workers N`, sinon chaque worker importerait le flux. Un worker suffit largement : les requêtes SQLite prennent quelques millisecondes.
+La base peut être vidée sans risque : l'import suivant la reconstruit entièrement.
+
+### Limites du plan gratuit à surveiller
+
+| Ressource | Limite gratuite | Usage attendu |
+|---|---|---|
+| Workers : requêtes | 100 000 / jour (hors fichiers statiques) | ≈ requêtes d'API non servies par le cache edge |
+| Workers : CPU | 10 ms / requête | Recherches par rayon : très en deçà. Les grandes régions (≈ 1 000 stations) sont les plus coûteuses : à surveiller dans le dashboard (Workers → Metrics) |
+| D1 : lignes écrites | 100 000 / jour | environ 4 500 stations modifiées par jour, soit bien en dessous |
+| D1 : lignes lues | 5 M / jour | un import lit ~9 800 lignes (empreintes) × 144 par jour ≈ 1,4 M ; le reste dépend du trafic non mis en cache |
 
 ## API
-
-Documentation interactive : `/api/docs`.
 
 | Endpoint | Description |
 |---|---|
@@ -193,20 +173,11 @@ Documentation interactive : `/api/docs`.
 | `GET /api/geocode?q=rennes` | Lieux (API Adresse) + départements/régions correspondants |
 | `GET /api/status` | Fraîcheur des données, dernière erreur d'import |
 | `GET /api/config` | Rayons, carburants, fond de carte |
-| `GET /healthz` | Sonde de santé (utilisée par Docker) |
 
-## Développement
-
-```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-pytest
-INGEST_MIN_STATIONS=1000 uvicorn app.main:app --reload    # base dans ./data/
-```
+Réponses en JSON, `Cache-Control: public, max-age=60` et CORS ouvert (`Access-Control-Allow-Origin: *`). Les erreurs ont la forme `{"detail": "..."}`.
 
 ## Licences et crédits
 
 - Prix des carburants : Ministère de l'Économie, [prix-carburants.gouv.fr](https://www.prix-carburants.gouv.fr/rubrique/opendata/), licence ouverte.
 - Géocodage : [API Adresse](https://adresse.data.gouv.fr) (Base Adresse Nationale).
 - Carte : © contributeurs [OpenStreetMap](https://www.openstreetmap.org/copyright), [Leaflet](https://leafletjs.com) (BSD-2).
-# ton-carburant.fr

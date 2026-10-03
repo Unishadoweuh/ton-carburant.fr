@@ -1,0 +1,36 @@
+name = "ton-carburant"
+main = "src/worker.ts"
+compatibility_date = "2026-09-01"
+
+# Domaine temporaire (zone unishadow.ovh sur Cloudflare). Quand toncarburant.fr
+# sera disponible, ajouter { pattern = "toncarburant.fr", custom_domain = true }
+# (et "www.toncarburant.fr" si besoin).
+routes = [
+  { pattern = "carburant.unishadow.ovh", custom_domain = true },
+]
+
+# Frontend statique : servi directement par Cloudflare (gratuit, sans invoquer
+# le Worker). Seules les requêtes /api/* exécutent le Worker.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = ["/api/*"]
+
+[[d1_databases]]
+binding = "ton_carburant_db"
+database_name = "ton-carburant-db"
+database_id = "cb208904-c889-46bd-8c87-571911d2ff0f"
+migrations_dir = "migrations"
+
+[observability]
+enabled = true
+
+# L'import du flux est exécuté par GitHub Actions (.github/workflows/ingest.yml) :
+# le plan gratuit des Workers limite le CPU à 10 ms par invocation, insuffisant
+# pour parser les ~29 Mo du flux. Pas de [triggers] cron ici.
+
+[vars]
+DEFAULT_RADIUS_KM = "10"
+MAX_RADIUS_KM = "50"
+RADIUS_OPTIONS_KM = "5,10,15,20,30,50"
+INGEST_INTERVAL_MINUTES = "10"
