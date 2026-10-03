@@ -17,7 +17,7 @@ binding = "ASSETS"
 run_worker_first = ["/api/*"]
 
 [[d1_databases]]
-binding = "ton_carburant_db"
+binding = "DB"
 database_name = "ton-carburant-db"
 database_id = "cb208904-c889-46bd-8c87-571911d2ff0f"
 migrations_dir = "migrations"
