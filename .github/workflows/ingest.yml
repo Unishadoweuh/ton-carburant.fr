@@ -8,6 +8,14 @@ on:
   schedule:
     - cron: "*/10 * * * *"
   workflow_dispatch:
+  # Relance l'import quand son code change (vérification après modification).
+  push:
+    branches: [main]
+    paths:
+      - ingest/**
+      - src/lib/feed.ts
+      - src/lib/brands.ts
+      - .github/workflows/ingest.yml
 
 # Un seul import à la fois ; un import en cours n'est jamais interrompu.
 concurrency:
